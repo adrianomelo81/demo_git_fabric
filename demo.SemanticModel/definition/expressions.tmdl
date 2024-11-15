@@ -1,0 +1,113 @@
+expression base_transacoes = "C:\Users\admsn\OneDrive\Projetos\demo_git_fabric\arquivos\transacoes.xlsx" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: d4e23f3c-a207-4029-b24c-06d0241daeee
+	queryGroup: Parametros
+
+	annotation PBI_NavigationStepName = Navegação
+
+	annotation PBI_ResultType = Text
+
+expression data_inicial = #date(2024, 11, 1) meta [IsParameterQuery=true, Type="Date", IsParameterQueryRequired=true]
+	lineageTag: fa26dcea-6d1f-4c0a-9f7f-d116203a6b69
+	queryGroup: Parametros
+
+	annotation PBI_NavigationStepName = Navegação
+
+	annotation PBI_ResultType = Date
+
+expression getCotacoes = ```
+		let
+		    getCotacoes = (dataInicial as date, dataFinal as date, moeda as text, pagina as number) as table =>
+		    let
+		        url = "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata",
+		        endpoint = "CotacaoMoedaPeriodo(moeda=@moeda,dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)",
+		        query = [
+		            #"@moeda" = "'" & moeda & "'",
+		            #"@dataInicial" = "'" &  Date.ToText(dataInicial,"MM-dd-yyyy") & "'",
+		            #"@dataFinalCotacao" = "'" & Date.ToText(dataFinal,"MM-dd-yyyy") & "'",
+		            #"$top" = Number.ToText(100),
+		            #"$skip" = Number.ToText((pagina-1)*100),
+		            #"$format"= "json"
+		        ],
+		        request = Web.Contents(
+		            url,
+		            [ RelativePath = endpoint, Query = query ]
+		        ),
+		        response = Json.Document(request, 65001), 
+		        lista = response[value] 
+		    in
+		        Table.FromRecords(lista), 
+		
+		    getCotacoesPaginacao = (dataInicial as date, dataFinal as date, moeda as text) as table =>
+		    let
+		        todasPaginas = List.Generate(
+		            ( ) => [ pagina = 1, cotacao = try getCotacoes(dataInicial, dataFinal, moeda, pagina) otherwise null ],
+		                each [cotacao] <> null and Table.RowCount([cotacao]) > 0,
+		                each [ pagina = [pagina] + 1, cotacao = try getCotacoes( dataInicial, dataFinal, moeda, pagina ) otherwise null],
+		                each [cotacao]
+		        ) 
+		    in
+		        Table.AddColumn(Table.Combine(todasPaginas), "Moeda", each moeda, type text),
+		
+		    processaCotacoes = (dataInicial as date, dataFinal as date) as table =>
+		    let
+		        moedas = List.Select(moedas[Moeda], each _ <> "BRL"),
+		
+		        todasCotacoes = List.Accumulate(
+		            moedas,
+		            #table({},{}),
+		            (s, c) => 
+		            Table.Combine({s, getCotacoesPaginacao(dataInicial, dataFinal, c)})
+		
+		        ),
+		
+		        colunasSelecionadas = Table.SelectColumns(
+		            todasCotacoes,
+		            { "Moeda", "dataHoraCotacao", "cotacaoCompra", "tipoBoletim" }
+		        ),
+		
+		        colunasRenomeadas = Table.RenameColumns(
+		            colunasSelecionadas,
+		            {
+		                {"dataHoraCotacao", "DataHora"},
+		                {"cotacaoCompra", "Cotacao"},
+		                {"tipoBoletim", "TipoBoletim"}
+		            }
+		        ),
+		
+		        tipoAlterado = Table.TransformColumnTypes(
+		            colunasRenomeadas,
+		            {
+		                {"DataHora", DateTime.Type},
+		                {"Cotacao", Number.Type}, 
+		                {"TipoBoletim", Text.Type}
+		            }
+		        ),
+		
+		        dataAdicionada = Table.AddColumn(
+		            tipoAlterado,
+		            "Data", 
+		            each DateTime.Date([DataHora]),
+		            type date
+		        )
+		
+		    in
+		        dataAdicionada   
+		
+		in
+		    processaCotacoes
+		```
+	lineageTag: bdc42455-9cc5-404f-8f6f-8b93772adb0a
+	queryGroup: Funcoes
+
+	annotation PBI_NavigationStepName = Navegação
+
+	annotation PBI_ResultType = Function
+
+expression data_final = DateTime.Date(DateTime.LocalNow())
+	lineageTag: 77d89cbf-b2fe-4570-b1b4-aff892a86432
+	queryGroup: Parametros
+
+	annotation PBI_NavigationStepName = Navegação
+
+	annotation PBI_ResultType = Date
+
